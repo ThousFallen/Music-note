@@ -1,3 +1,4 @@
+# main.py 修复版
 # -*- coding: utf-8 -*-
 """
 音乐笔记软件 - 主程序入口
@@ -29,6 +30,37 @@ class MusicNotesApp:
         
         # 初始化界面
         self._setup_ui()
+        
+        # 启动时检查环境
+        self._check_environment()
+    
+    def _check_environment(self):
+        """检查渲染环境"""
+        from staff_renderer import StaffRenderer
+        env_info = StaffRenderer.check_render_environment()
+        
+        info_text = f"🎵 音乐笔记 - 环境检查\n\n"
+        info_text += f"music21 版本：{env_info.get('music21_version', '未知')}\n"
+        info_text += f"LilyPond 已安装：{'✅ 是' if env_info.get('lilypond_installed') else '❌ 否'}\n"
+        
+        if env_info.get('lilypond_path'):
+            info_text += f"LilyPond 路径：{env_info['lilypond_path']}\n"
+        
+        if env_info.get('lilypond_version'):
+            info_text += f"LilyPond 版本：{env_info['lilypond_version']}\n"
+        
+        info_text += f"\n渲染状态：{'✅ 可用' if env_info.get('lilypond_installed') else '⚠️ 使用备用方案'}\n"
+        
+        if not env_info.get('lilypond_installed'):
+            info_text += "\n⚠️ 未检测到 LilyPond，将使用备用渲染方案（简化五线谱）\n"
+            info_text += "\n如需高质量渲染，请安装 LilyPond:\n"
+            info_text += "https://lilypond.org/download.html\n"
+            info_text += "\n已检测路径:\n"
+            info_text += "D:\\any code related\\lilypond-2.24.4-mingw-x86_64\\lilypond-2.24.4\\bin\\lilypond.exe\n"
+        
+        # 只在首次启动或 LilyPond 未安装时显示
+        if not env_info.get('lilypond_installed'):
+            messagebox.showwarning("渲染环境检查", info_text)
         
     def _setup_ui(self):
         """设置用户界面"""
@@ -80,6 +112,17 @@ class MusicNotesApp:
             **button_config
         )
         self.btn_create.pack(pady=15)
+        
+        # 环境检查按钮
+        self.btn_check = tk.Button(
+            button_frame,
+            text="🔧 环境检查",
+            bg="#9B59B6",
+            fg="white",
+            command=self._check_environment,
+            **button_config
+        )
+        self.btn_check.pack(pady=15)
         
         # 及时录音按钮
         self.btn_record = tk.Button(

@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-音乐笔记 - 编辑器模块
-功能：Markdown 编辑、五线谱插入、笔记保存
+音乐笔记 - 编辑器模块（改进版）
+功能：Markdown 编辑、五线谱插入、笔记保存、多块五线谱渲染
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, colorchooser
 from datetime import datetime
 import os
+import re
 from staff_renderer import StaffRenderer
 from PIL import Image, ImageTk
 
@@ -36,6 +37,11 @@ class MusicNoteEditor:
         self.content_text = None
         self.status_label = None
         self.line_number_label = None
+        self.staff_canvas = None
+        self.staff_preview_label = None
+        self.auto_render_var = None
+        self.current_staff_image = None
+        self.staff_images = []  # 存储所有五线谱图片引用
         
         # 加载已有内容或创建新内容
         self.content = self._load_content()
@@ -99,11 +105,21 @@ class MusicNoteEditor:
             **btn_config
         ).pack(side=tk.LEFT, padx=5, pady=10)
         
+        # 管理五线谱按钮
+        tk.Button(
+            toolbar,
+            text="📋 管理五线谱",
+            bg="#E67E22",
+            fg="white",
+            command=self._manage_staffs,
+            **btn_config
+        ).pack(side=tk.LEFT, padx=5, pady=10)
+        
         # 插入和弦按钮
         tk.Button(
             toolbar,
             text="🎸 插入和弦",
-            bg="#E67E22",
+            bg="#2ECC71",
             fg="white",
             command=self._insert_chord,
             **btn_config
@@ -113,7 +129,7 @@ class MusicNoteEditor:
         tk.Button(
             toolbar,
             text="📝 插入歌词",
-            bg="#2ECC71",
+            bg="#1ABC9C",
             fg="white",
             command=self._insert_lyrics,
             **btn_config
@@ -204,11 +220,12 @@ class MusicNoteEditor:
         # 更新行号和字数
         self._update_line_numbers()
         self._update_word_count()
-        # 在 === 编辑区域 === 之后添加五线谱预览区域
+
         # === 五线谱预览区域 ===
         staff_preview_frame = tk.Frame(main_frame, bg="#f0f0f0", height=200)
         staff_preview_frame.pack(fill=tk.X, side=tk.BOTTOM)
         staff_preview_frame.pack_propagate(False)
+        
         # 预览标题
         tk.Label(
             staff_preview_frame,
@@ -245,8 +262,21 @@ class MusicNoteEditor:
             bg="#9B59B6",
             fg="white",
             command=self._render_staff_preview
+        ).pack(pady=5)    
+        
+        # 自动渲染选项
+        self.auto_render_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            staff_preview_frame,
+            text="自动渲染预览",
+            variable=self.auto_render_var,
+            bg="#f0f0f0",
+            font=("微软雅黑", 9)
         ).pack(pady=5)
-                
+
+        # 初始化时检查是否需要渲染
+        if '```abc' in self.content and self.auto_render_var.get():
+            self.window.after(1000, self._render_staff_preview)
     
     def _on_content_change(self, event=None):
         """内容变化处理"""
@@ -254,6 +284,12 @@ class MusicNoteEditor:
         self._update_line_numbers()
         self._update_word_count()
         self._update_title()
+        
+        # 自动检测 ABC 代码块变化并更新预览
+        content = self.content_text.get("1.0", "end-1c")
+        if '```abc' in content and self.auto_render_var.get():
+            # 延迟渲染避免频繁刷新
+            self.window.after(1000, self._render_staff_preview)
     
     def _update_line_numbers(self, event=None):
         """更新行号显示"""
@@ -281,7 +317,7 @@ class MusicNoteEditor:
     
     def _insert_staff(self):
         """插入五线谱内容"""
-        dialog = StaffInsertDialog(self.window)
+        dialog = StaffInsertDialog(self.window, self.content_text)
         if dialog.result:
             # 插入 ABC 记谱法格式的五线谱
             staff_text = f"\n```abc\n{dialog.result}\n```\n"
@@ -290,6 +326,21 @@ class MusicNoteEditor:
             self.status_label.config(text="已插入五线谱")
         
             # 自动渲染预览
+            self.window.after(500, self._render_staff_preview)
+    
+    def _manage_staffs(self):
+        """管理已插入的五线谱"""
+        content = self.content_text.get("1.0", "end-1c")
+        abc_pattern = r'```abc\n(.*?)\n```'
+        matches = re.findall(abc_pattern, content, re.DOTALL)
+        
+        if not matches:
+            messagebox.showinfo("提示", "当前笔记中没有五线谱块")
+            return
+        
+        dialog = StaffManageDialog(self.window, matches, self.content_text)
+        if dialog.modified:
+            self._on_content_change()
             self.window.after(500, self._render_staff_preview)
     
     def _insert_chord(self):
@@ -311,46 +362,107 @@ class MusicNoteEditor:
         """保存笔记"""
         content = self.content_text.get("1.0", "end-1c")
         
-        if not self.file_path:
-            # 新建笔记，选择保存位置
-            default_name = datetime.now().strftime("笔记_%Y%m%d_%H%M%S.md")
-            file_path = filedialog.asksaveasfilename(
-                title="保存笔记",
-                defaultextension=".md",
-                filetypes=[("Markdown 文件", "*.md"), ("所有文件", "*.*")],
-                initialfile=default_name
-            )
-            if not file_path:
-                return
-            self.file_path = file_path
-            self.window.title(f"编辑：{os.path.basename(file_path)}")
+        # 验证 ABC 代码块格式
+        abc_blocks = re.findall(r'```abc\n.*?\n```', content, re.DOTALL)
         
+        if not self.file_path:
+            # 如果未指定路径，提示另存为
+            self.file_path = filedialog.asksaveasfilename(
+                defaultextension=".md",
+                filetypes=[("Markdown Files", "*.md"), ("All Files", "*.*")],
+                initialdir=os.path.join(os.path.dirname(__file__), "data", "projects")
+            )
+            if not self.file_path:
+                return
+
         try:
             with open(self.file_path, "w", encoding="utf-8") as f:
                 f.write(content)
             self.modified = False
             self._update_title()
-            self.status_label.config(text=f"已保存：{os.path.basename(self.file_path)}")
-            messagebox.showinfo("保存成功", "笔记已保存！")
+            self.status_label.config(text=f"已保存：{os.path.basename(self.file_path)} | {len(abc_blocks)} 个五线谱")
+            messagebox.showinfo("保存成功", f"笔记已保存！\n包含 {len(abc_blocks)} 个五线谱片段")
         except Exception as e:
             messagebox.showerror("保存失败", f"保存时出错：{str(e)}")
     
     def _preview(self):
-        """预览笔记"""
+        """预览笔记 - 支持文本和五线谱混合显示"""
         preview_window = tk.Toplevel(self.window)
         preview_window.title("笔记预览")
-        preview_window.geometry("800x600")
+        preview_window.geometry("900x700")
         
-        text_widget = tk.Text(preview_window, font=("微软雅黑", 12), wrap=tk.WORD)
-        text_widget.pack(fill=tk.BOTH, expand=True)
+        # 创建滚动框架
+        main_canvas = tk.Canvas(preview_window, bg="white")
+        scrollbar = ttk.Scrollbar(preview_window, orient=tk.VERTICAL, command=main_canvas.yview)
+        scrollable_frame = tk.Frame(main_canvas)
         
-        content = self.content_text.get("1.0", "end-1c")
-        text_widget.insert("1.0", content)
-        text_widget.config(state=tk.DISABLED)
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+        )
         
-        scrollbar = ttk.Scrollbar(preview_window, command=text_widget.yview)
+        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        main_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        main_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        text_widget.config(yscrollcommand=scrollbar.set)
+        
+        # 解析内容并显示
+        content = self.content_text.get("1.0", "end-1c")
+        self._render_preview_content(scrollable_frame, content)
+        
+        # 保存图片引用防止垃圾回收
+        preview_window.preview_images = []
+        
+        # 鼠标滚轮支持
+        def _on_mousewheel(event):
+            main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # 窗口关闭时清理
+        preview_window.protocol("WM_DELETE_WINDOW", lambda: (
+            preview_window.destroy(),
+            main_canvas.unbind_all("<MouseWheel>")
+        ))
+
+    def _render_preview_content(self, parent, content):
+        """渲染预览内容 - 混合文本和五线谱"""
+        # 分割 ABC 代码块和普通文本
+        abc_pattern = r'```abc\n(.*?)\n```'
+        parts = re.split(abc_pattern, content, flags=re.DOTALL)
+        
+        for i, part in enumerate(parts):
+            if i % 2 == 1:  # ABC 代码块（奇数索引）
+                # 渲染五线谱
+                try:
+                    tk_image = StaffRenderer.abc_to_tkimage(part.strip(), width=800, height=150)
+                    parent.preview_images.append(tk_image)  # 保持引用
+                    
+                    label = tk.Label(parent, image=tk_image, bg="white")
+                    label.image = tk_image  # 再次保持引用
+                    label.pack(pady=10, padx=20)
+                except Exception as e:
+                    error_label = tk.Label(
+                        parent,
+                        text=f"⚠️ 五线谱渲染失败：{str(e)}",
+                        fg="red",
+                        bg="white",
+                        font=("微软雅黑", 10)
+                    )
+                    error_label.pack(pady=5, padx=20)
+            else:  # 普通文本（偶数索引）
+                if part.strip():
+                    text_widget = tk.Text(
+                        parent,
+                        font=("微软雅黑", 12),
+                        wrap=tk.WORD,
+                        bg="white",
+                        relief=tk.FLAT,
+                        height=len(part.split('\n')) + 2
+                    )
+                    text_widget.insert("1.0", part)
+                    text_widget.config(state=tk.DISABLED)
+                    text_widget.pack(fill=tk.X, padx=20, pady=5)
     
     def _on_close(self):
         """窗口关闭处理"""
@@ -364,13 +476,13 @@ class MusicNoteEditor:
             elif response:
                 self._save_note()
         self.window.destroy()
+    
     def _render_staff_preview(self):
         """渲染五线谱预览"""
         try:
             content = self.content_text.get("1.0", "end-1c")
             
             # 查找 ABC 代码块
-            import re
             abc_pattern = r'```abc\n(.*?)\n```'
             matches = re.findall(abc_pattern, content, re.DOTALL)
             
@@ -395,30 +507,18 @@ class MusicNoteEditor:
             self.staff_canvas.delete("all")
             self.staff_preview_label.config(text=f"渲染失败：{str(e)}")
 
-    def _on_content_change(self, event=None):
-        """内容变化处理"""
-        self.modified = True
-        self._update_line_numbers()
-        self._update_word_count()
-        self._update_title()
-        
-        # 自动检测 ABC 代码块变化并更新预览
-        content = self.content_text.get("1.0", "end-1c")
-        if '```abc' in content:
-            # 延迟渲染避免频繁刷新
-            self.window.after(1000, self._render_staff_preview)
-
 
 class StaffInsertDialog:
-    """五线谱插入对话框"""
+    """五线谱插入对话框（改进版）"""
     
-    def __init__(self, parent):
+    def __init__(self, parent, content_text=None):
         """初始化对话框"""
         self.result = None
+        self.content_text = content_text
         
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("插入五线谱")
-        self.dialog.geometry("600x500")
+        self.dialog.geometry("600x550")
         self.dialog.transient(parent)
         self.dialog.grab_set()
         
@@ -486,11 +586,22 @@ C C G G | A A G2 | F F E E | D D C2"""
         btn_frame = tk.Frame(self.dialog)
         btn_frame.pack(pady=10)
         
+        # 插入并保存按钮
         tk.Button(
             btn_frame,
-            text="确定",
+            text="✅ 插入并保存",
+            width=12,
+            bg="#2ECC71",
+            fg="white",
+            command=self._insert_and_save
+        ).pack(side=tk.LEFT, padx=10)
+        
+        # 仅复制按钮
+        tk.Button(
+            btn_frame,
+            text="📋 仅复制",
             width=10,
-            command=self._confirm
+            command=self._copy_only
         ).pack(side=tk.LEFT, padx=10)
         
         tk.Button(
@@ -526,11 +637,145 @@ C C G G | A A G2 | F F E E | D D C2"""
             self.preview_canvas.delete("all")
             self.preview_label.config(text=f"预览失败：{str(e)}")
     
-    def _confirm(self):
-        """确认输入"""
-        self.result = self.text_input.get("1.0", "end-1c").strip()
-        if self.result:
+    def _insert_and_save(self):
+        """插入并保存到文本"""
+        abc_text = self.text_input.get("1.0", "end-1c").strip()
+        if abc_text:
+            self.result = abc_text
+            # 如果有 content_text 引用，直接插入
+            if self.content_text:
+                staff_text = f"\n```abc\n{abc_text}\n```\n"
+                self.content_text.insert(tk.INSERT, staff_text)
             self.dialog.destroy()
+    
+    def _copy_only(self):
+        """仅复制到剪贴板"""
+        abc_text = self.text_input.get("1.0", "end-1c").strip()
+        if abc_text:
+            self.result = abc_text
+            self.dialog.clipboard_clear()
+            self.dialog.clipboard_append(abc_text)
+            self.dialog.update()
+            messagebox.showinfo("已复制", "五线谱代码已复制到剪贴板")
+            self.dialog.destroy()
+
+
+class StaffManageDialog:
+    """五线谱管理对话框"""
+    
+    def __init__(self, parent, staff_list, content_text):
+        """初始化对话框"""
+        self.result = None
+        self.modified = False
+        self.staff_list = staff_list
+        self.content_text = content_text
+        
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("管理五线谱")
+        self.dialog.geometry("700x500")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # 列表区域
+        list_frame = tk.Frame(self.dialog)
+        list_frame.pack(padx=20, pady=10, fill=tk.BOTH, expand=True)
+        
+        tk.Label(
+            list_frame,
+            text="已插入的五线谱块:",
+            font=("微软雅黑", 10, "bold")
+        ).pack(anchor=tk.W, pady=5)
+        
+        # 五线谱列表
+        self.staff_listbox = tk.Listbox(list_frame, font=("Consolas", 10), height=10)
+        self.staff_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        for i, staff in enumerate(staff_list):
+            preview = staff.split('\n')[0][:50] + "..." if len(staff) > 50 else staff.split('\n')[0]
+            self.staff_listbox.insert(tk.END, f"#{i+1} {preview}")
+        
+        # 按钮区域
+        btn_frame = tk.Frame(self.dialog)
+        btn_frame.pack(pady=10)
+        
+        tk.Button(
+            btn_frame,
+            text="编辑",
+            width=10,
+            command=self._edit_staff
+        ).pack(side=tk.LEFT, padx=10)
+        
+        tk.Button(
+            btn_frame,
+            text="删除",
+            width=10,
+            command=self._delete_staff
+        ).pack(side=tk.LEFT, padx=10)
+        
+        tk.Button(
+            btn_frame,
+            text="关闭",
+            width=10,
+            command=self.dialog.destroy
+        ).pack(side=tk.LEFT, padx=10)
+        
+        self.dialog.wait_window()
+    
+    def _edit_staff(self):
+        """编辑选中的五线谱"""
+        selection = self.staff_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("提示", "请先选择要编辑的五线谱")
+            return
+        
+        index = selection[0]
+        dialog = tk.Toplevel(self.dialog)
+        dialog.title("编辑五线谱")
+        dialog.geometry("600x400")
+        dialog.transient(self.dialog)
+        dialog.grab_set()
+        
+        text_input = tk.Text(dialog, font=("Consolas", 11), height=15)
+        text_input.pack(padx=20, pady=10, fill=tk.BOTH, expand=True)
+        text_input.insert("1.0", self.staff_list[index])
+        
+        def save_edit():
+            new_content = text_input.get("1.0", "end-1c").strip()
+            if new_content:
+                # 替换原内容
+                content = self.content_text.get("1.0", "end-1c")
+                abc_pattern = r'```abc\n.*?\n```'
+                matches = list(re.finditer(abc_pattern, content, re.DOTALL))
+                if index < len(matches):
+                    match = matches[index]
+                    new_staff_block = f"```abc\n{new_content}\n```"
+                    content = content[:match.start()] + new_staff_block + content[match.end():]
+                    self.content_text.delete("1.0", tk.END)
+                    self.content_text.insert("1.0", content)
+                    self.modified = True
+                    dialog.destroy()
+        
+        tk.Button(dialog, text="保存", command=save_edit).pack(pady=10)
+    
+    def _delete_staff(self):
+        """删除选中的五线谱"""
+        selection = self.staff_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("提示", "请先选择要删除的五线谱")
+            return
+        
+        if messagebox.askyesno("确认", "确定要删除选中的五线谱吗？"):
+            index = selection[0]
+            content = self.content_text.get("1.0", "end-1c")
+            abc_pattern = r'```abc\n.*?\n```'
+            matches = list(re.finditer(abc_pattern, content, re.DOTALL))
+            if index < len(matches):
+                match = matches[index]
+                content = content[:match.start()] + content[match.end():]
+                self.content_text.delete("1.0", tk.END)
+                self.content_text.insert("1.0", content)
+                self.modified = True
+                self.dialog.destroy()
 
 
 class ChordInsertDialog:
