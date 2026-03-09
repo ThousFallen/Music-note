@@ -9,6 +9,9 @@ from tkinter import messagebox, filedialog
 import os
 from datetime import datetime
 
+# 导入编辑器模块
+from editor import MusicNoteEditor
+
 
 class MusicNotesApp:
     """音乐笔记应用主窗口类"""
@@ -19,9 +22,6 @@ class MusicNotesApp:
         self.root.title("音乐笔记")
         self.root.geometry("800x600")
         self.root.resizable(True, True)
-        
-        # 设置窗口图标（可选）
-        # self.root.iconbitmap("assets/icons/app.ico")
         
         # 数据目录
         self.data_dir = os.path.join(os.path.dirname(__file__), "data", "projects")
@@ -116,31 +116,15 @@ class MusicNotesApp:
         )
         
         if file_path:
+            # 打开编辑器窗口
+            MusicNoteEditor(self.root, file_path)
             self.status_label.config(text=f"已打开：{os.path.basename(file_path)}")
-            messagebox.showinfo("提示", f"即将打开笔记：\n{file_path}\n\n（后续版本将显示编辑界面）")
-            # TODO: 跳转到笔记编辑界面
     
     def _create_note(self):
         """创建新笔记"""
-        # 生成默认文件名
-        default_name = datetime.now().strftime("笔记_%Y%m%d_%H%M%S.md")
-        
-        file_path = filedialog.asksaveasfilename(
-            title="保存新笔记",
-            defaultextension=".md",
-            filetypes=[("Markdown 文件", "*.md"), ("所有文件", "*.*")],
-            initialdir=self.data_dir,
-            initialfile=default_name
-        )
-        
-        if file_path:
-            # 创建空文件
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(f"# 新笔记\n\n创建时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            
-            self.status_label.config(text=f"已创建：{os.path.basename(file_path)}")
-            messagebox.showinfo("提示", f"笔记已创建：\n{file_path}\n\n（后续版本将打开编辑界面）")
-            # TODO: 跳转到笔记编辑界面
+        # 直接打开编辑器窗口（新建模式）
+        MusicNoteEditor(self.root, None)
+        self.status_label.config(text="已创建新笔记")
     
     def _start_recording(self):
         """开始录音功能"""
@@ -151,7 +135,6 @@ class MusicNotesApp:
             "2. MIDI 输入录制\n"
             "3. 音频保存与播放"
         )
-        # TODO: 集成 pygame 或 pyaudio 实现录音
 
 
 def main():
