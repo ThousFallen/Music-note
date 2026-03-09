@@ -1,0 +1,12 @@
+# 核心依赖（Python 内置，无需安装）
+# tkinter - Python 内置 GUI 库
+# music21 - 音乐理论处理
+# pygame - 音频播放
+# markdown - Markdown 解析
+# tkhtmlview - Tkinter HTML 渲染
+
+# 使用 pip 安装第三方库
+music21==9.1.0
+pygame==2.5.2
+markdown==3.5.2
+tkhtmlview==0.3.2
